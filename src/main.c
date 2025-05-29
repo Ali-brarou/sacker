@@ -9,6 +9,7 @@
 
 #define MAX_FILENAME 100
 #define PACKED_EXTENSION "_packed"
+#define STUB_SEC_NAME ".test_stub"
 
 #define IS_ELF(header) (memcmp(header->e_ident, ELFMAG, SELFMAG) == 0)
 
@@ -24,13 +25,13 @@ Elf64_Shdr* elf_shstrtab_hdr;
 uint8_t*    elf_shstrtab;  
 
 Elf64_Shdr* text_sec; 
-Elf64_Shdr* note_sec; 
-Elf64_Phdr* note_seg; 
+Elf64_Shdr* stub_sec; 
+Elf64_Phdr* stub_seg; 
 
 uint8_t* text; 
 size_t text_size; 
-uint8_t* note; 
-size_t note_size; 
+uint8_t* stub; 
+size_t stub_size; 
 
 
 void elf_parse(const char* elf_path)
@@ -101,9 +102,9 @@ void elf_parse(const char* elf_path)
         {
             text_sec = &elf_shdrs[i]; 
         }
-        if (!strcmp(section_name, ".note.ABI-tag"))
+        if (!strcmp(section_name, STUB_SEC_NAME))
         {
-            note_sec = &elf_shdrs[i]; 
+            stub_sec = &elf_shdrs[i]; 
         }
     }
 
@@ -113,36 +114,36 @@ void elf_parse(const char* elf_path)
         goto cleanup; 
     }
 
-    if (!note_sec)
+    if (!stub_sec)
     {
-        fprintf(stderr, "%s: No note section in this binary (maybe stripped)\n", elf_path);
+        fprintf(stderr, "%s: No stub section (Try adding it manually)\n", elf_path);
         goto cleanup; 
     }
 
-    //search for the segment that conatains note section 
+    //search for the segment that conatains the stub section 
 
     for (size_t i = 0; i < elf_header->e_phnum; i++)
     {
         Elf64_Phdr* phdr = &elf_phdrs[i]; 
-        if (note_sec->sh_offset >= phdr->p_offset && 
-                (note_sec->sh_offset + note_sec->sh_size) <= (phdr->p_offset + phdr->p_filesz))
+        if (stub_sec->sh_offset >= phdr->p_offset && 
+                (stub_sec->sh_offset + stub_sec->sh_size) <= (phdr->p_offset + phdr->p_filesz))
         {
-            note_seg = phdr; 
+            stub_seg = phdr; 
             break; 
         }
     }
 
-    if (!note_seg)
+    if (!stub_seg)
     {
-        fprintf(stderr, "%s: Failed finding the segment that contains the note section\n", elf_path);
+        fprintf(stderr, "%s: Failed finding the segment that contains the stub section\n", elf_path);
         goto cleanup; 
 
     }
 
     text = elf_buff + text_sec -> sh_offset; 
     text_size = text_sec -> sh_size; 
-    note = elf_buff + note_sec -> sh_offset; 
-    note_size = note_sec -> sh_size; 
+    stub = elf_buff + stub_sec -> sh_offset; 
+    stub_size = stub_sec -> sh_size; 
 
     return; 
 
@@ -155,11 +156,18 @@ cleanup:
 
 void elf_pack()
 {
-    uint8_t* old_entry = (uint8_t*)elf_header -> e_entry; 
-    uint8_t* new_entry = (uint8_t*)note_sec -> sh_offset; 
+    Elf64_Addr old_entry = elf_header -> e_entry; 
+    Elf64_Addr new_entry = stub_sec -> sh_addr; 
 
-    //first make the segment that contains note executable    
-    note_seg->p_flags |= PF_X; 
+    //first make the segment that contains the stub executable    
+    stub_seg->p_flags |= PF_X; 
+
+    //fill the stub with the payload (an inf loop for now)
+    stub[0] = '\xeb'; 
+    stub[1] = '\xfe'; 
+
+    //change the entry 
+    elf_header -> e_entry = (Elf64_Addr)new_entry;     
 }
 
 const char* get_filename(const char* path)
@@ -200,14 +208,15 @@ int main(int argc, char* argv[])
 
     elf_parse(argv[1]); 
 
-    printf("Shdr address : %#" PRIx64 "\n", elf_header -> e_entry + elf_header -> e_shoff); 
+    printf("Shdr address : %#" PRIx64 "\n", elf_header -> e_shoff); 
     printf("Entry point address : %#" PRIx64 "\n", elf_header -> e_entry); 
     printf("Number of sections : %d\n", elf_header -> e_shnum); 
-    printf("Size of note section : %ld\n", note_size); 
+    printf("Size of stub section : %ld\n", stub_size); 
 
     //fflush(stdout); 
     //write(1, text, text_size);  
      
+    elf_pack(); 
     elf_dump(argv[1]); 
 
     elf_clean(); 

@@ -11,5 +11,5 @@ sample: sample.c
 
 .PHONY: clean 
 clean: 
-	@rm -rf sacker sample
+	@rm -rf sacker sample sample_packed
 
