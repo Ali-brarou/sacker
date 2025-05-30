@@ -10,6 +10,7 @@
 #define MAX_FILENAME 100
 #define PACKED_EXTENSION "_packed"
 #define STUB_SEC_NAME ".test_stub"
+#define XOR_KEY 0x69
 
 #define IS_ELF(header) (memcmp(header->e_ident, ELFMAG, SELFMAG) == 0)
 
@@ -27,6 +28,7 @@ uint8_t*    elf_shstrtab;
 Elf64_Shdr* text_sec; 
 Elf64_Shdr* stub_sec; 
 Elf64_Phdr* stub_seg; 
+Elf64_Phdr* text_seg; 
 
 uint8_t* text; 
 size_t text_size; 
@@ -129,13 +131,23 @@ void elf_parse(const char* elf_path)
                 (stub_sec->sh_offset + stub_sec->sh_size) <= (phdr->p_offset + phdr->p_filesz))
         {
             stub_seg = phdr; 
-            break; 
+        }
+        if (text_sec->sh_offset >= phdr->p_offset && 
+                (text_sec->sh_offset + text_sec->sh_size) <= (phdr->p_offset + phdr->p_filesz))
+        {
+            text_seg = phdr; 
         }
     }
 
     if (!stub_seg)
     {
         fprintf(stderr, "%s: Failed finding the segment that contains the stub section\n", elf_path);
+        goto cleanup; 
+
+    }
+    if (!text_seg)
+    {
+        fprintf(stderr, "%s: Failed finding the segment that contains the text section\n", elf_path);
         goto cleanup; 
 
     }
@@ -154,17 +166,57 @@ cleanup:
     exit(EXIT_FAILURE); 
 }
 
+
 void elf_pack()
 {
     Elf64_Addr old_entry = elf_header -> e_entry; 
     Elf64_Addr new_entry = stub_sec -> sh_addr; 
 
-    //first make the segment that contains the stub executable    
-    stub_seg->p_flags |= PF_X; 
 
-    //fill the stub with the payload (an inf loop for now)
-    stub[0] = '\xeb'; 
-    stub[1] = '\xfe'; 
+    //xor the text segment 
+    for (size_t i = 0; i < text_size; i++)
+    {
+        text[i] ^= XOR_KEY; 
+    }
+
+    //make the segment that contains the stub executable    
+    stub_seg->p_flags |= PF_X; 
+    //make the segment that contains the text writable to decrypt    
+    text_seg->p_flags |= PF_W; 
+
+
+    //fill the stub with the payload 
+
+    uint8_t stub_payload[] = {
+        "\xe8\x00\x00\x00\x00" // a hack to pop rip register to rsi
+        "\x5e" 
+
+        "\x48\x81\xc6\x00\x00\x00\x00"              //add text_offset rsi (patched)
+        "\x48\xb9\x00\x00\x00\x00\x00\x00\x00\x00"  //moveabs text_size rcx (patched) 
+        "\xb0\x00"                                  //mov xor_key al (patched)
+                                                 
+        "\x48\x85\xc9"          //test rcx rcx
+        "\x74\x0d"              //jz to end of decryption
+        "\x30\x06"              //xor byte [rsi] al
+        "\x48\xff\xc6"          //inc rsi
+        "\x48\xff\xc9"          //dec rcx
+        "\xe9\xee\xff\xff\xff"  //jmp back to the loop
+    
+        //end of decryption
+        "\xe8\x00\x00\x00\x00" //jump to old entry (patched)
+    }; 
+
+    memcpy(stub, stub_payload, sizeof(stub_payload)); 
+
+    //calculate offsets needed  
+    uint32_t text_offset = (uint32_t)(text - stub - 5); 
+    uint32_t entries_offset = (uint32_t)(old_entry - new_entry - 48); 
+
+    //patch the payload 
+    *(uint32_t*)(&stub[9]) = text_offset; 
+    *(uint64_t*)(&stub[15]) = text_size; 
+    *(uint8_t*)(&stub[24]) = XOR_KEY; 
+    *(uint32_t*)(&stub[44]) = entries_offset; 
 
     //change the entry 
     elf_header -> e_entry = (Elf64_Addr)new_entry;     
@@ -191,6 +243,7 @@ void elf_dump(const char* orig_elf_path)
     }
 
     fwrite(elf_buff, 1, elf_buff_size, out_elf_file); 
+    fclose(out_elf_file); 
 }
 
 void elf_clean()
