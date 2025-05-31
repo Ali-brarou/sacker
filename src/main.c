@@ -203,23 +203,26 @@ void elf_pack()
         "\xe9\xee\xff\xff\xff"  //jmp back to the loop
     
         //end of decryption
-        "\xe8\x00\x00\x00\x00" //jump to old entry (patched)
+        "\x48\x31\xc9" //xor rcx, rcx
+        "\x48\x31\xf6" //xor rsi, rsi
+        "\x48\x31\xc0" //xor rax, rax
+        "\xe9\x00\x00\x00\x00" //jump to old entry (patched)
     }; 
 
     memcpy(stub, stub_payload, sizeof(stub_payload)); 
 
     //calculate offsets needed  
     uint32_t text_offset = (uint32_t)(text - stub - 5); 
-    uint32_t entries_offset = (uint32_t)(old_entry - new_entry - 48); 
+    uint32_t entries_offset = (uint32_t)(old_entry - new_entry - 57); 
 
     //patch the payload 
     *(uint32_t*)(&stub[9]) = text_offset; 
     *(uint64_t*)(&stub[15]) = text_size; 
     *(uint8_t*)(&stub[24]) = XOR_KEY; 
-    *(uint32_t*)(&stub[44]) = entries_offset; 
+    *(uint32_t*)(&stub[53]) = entries_offset; 
 
     //change the entry 
-    elf_header -> e_entry = (Elf64_Addr)new_entry;     
+    elf_header -> e_entry = (Elf64_Addr)(new_entry);     
 }
 
 const char* get_filename(const char* path)

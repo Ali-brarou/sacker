@@ -18,5 +18,8 @@ xor_loop:
     jmp xor_loop
 
 xor_done:
-    call 0x00
+    xor rcx, rcx
+    xor rsi, rsi 
+    xor rax, rax
+    jmp 0x00
 
